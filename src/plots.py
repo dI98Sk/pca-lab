@@ -1,0 +1,157 @@
+"""Графики проекта. Единый стиль: светлая подложка, приглушённые оси."""
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from matplotlib.colors import LinearSegmentedColormap
+
+FIG_DIR = Path(__file__).resolve().parent.parent / "reports" / "figures"
+
+SURFACE = "#fcfcfb"
+TEXT, TEXT_MUTED = "#0b0b0b", "#52514e"
+BLUE = "#2a78d6"
+# Расходящаяся шкала: синий (−) → нейтральный серый (0) → красный (+)
+DIVERGING = LinearSegmentedColormap.from_list(
+    "blue_gray_red", ["#104281", "#3987e5", "#f0efec", "#e34948", "#9e2a2a"]
+)
+
+
+def _style(ax):
+    ax.set_facecolor(SURFACE)
+    ax.figure.set_facecolor(SURFACE)
+    ax.tick_params(colors=TEXT_MUTED, length=0)
+    for side in ax.spines.values():
+        side.set_visible(False)
+
+
+def _save(fig, save_as):
+    if save_as:
+        FIG_DIR.mkdir(parents=True, exist_ok=True)
+        fig.savefig(FIG_DIR / save_as, dpi=150, facecolor=SURFACE)
+
+
+def _sector_labels(ax, groups: dict, x: float, vlines: bool = False):
+    """Белые разделители между секторами и подписи секторов справа."""
+    edge = 0
+    for sector, tickers in groups.items():
+        if edge:
+            ax.axhline(edge - 0.5, color=SURFACE, lw=2)
+            if vlines:
+                ax.axvline(edge - 0.5, color=SURFACE, lw=2)
+        ax.text(x, edge + len(tickers) / 2 - 0.5, sector, va="center", fontsize=9, color=TEXT_MUTED)
+        edge += len(tickers)
+
+
+def corr_heatmap(corr: pd.DataFrame, groups: dict, title: str, save_as: str | None = None):
+    """Тепловая карта корреляций; тонкие линии отделяют сектора."""
+    fig, ax = plt.subplots(figsize=(9, 8))
+    _style(ax)
+    im = ax.imshow(corr.to_numpy(), cmap=DIVERGING, vmin=-1, vmax=1)
+
+    n = len(corr)
+    ax.set_xticks(range(n), corr.columns, rotation=90, fontsize=8)
+    ax.set_yticks(range(n), corr.index, fontsize=8)
+    _sector_labels(ax, groups, x=n + 0.3, vlines=True)
+
+    cbar = fig.colorbar(im, ax=ax, fraction=0.035, pad=0.13)
+    cbar.outline.set_visible(False)
+    cbar.ax.tick_params(colors=TEXT_MUTED, length=0, labelsize=8)
+    ax.set_title(title, loc="left", color=TEXT, fontsize=12, pad=12)
+    fig.tight_layout()
+    _save(fig, save_as)
+    return fig
+
+
+def scree(explained: pd.Series, k: int = 10, title: str = "", save_as: str | None = None):
+    """Доля дисперсии первых k компонент; под столбцом — накопленная сумма."""
+    ev = explained.iloc[:k] * 100
+    fig, ax = plt.subplots(figsize=(8, 3.6))
+    _style(ax)
+    ax.bar(ev.index, ev.values, color=BLUE, width=0.6)
+    for i, (v, cum) in enumerate(zip(ev.values, ev.cumsum().values)):
+        ax.text(i, v + 0.5, f"{v:.0f}%", ha="center", fontsize=9, color=TEXT)
+        ax.text(i, -3.2, f"Σ {cum:.0f}%", ha="center", fontsize=8, color=TEXT_MUTED)
+    ax.set_ylim(-4.5, ev.max() + 4)
+    ax.set_yticks([])
+    ax.axhline(0, color="#d9d8d3", lw=1)
+    ax.set_title(title, loc="left", color=TEXT, fontsize=12)
+    fig.tight_layout()
+    _save(fig, save_as)
+    return fig
+
+
+def loadings_heatmap(loadings: pd.DataFrame, groups: dict, title: str, save_as: str | None = None):
+    """Веса активов в главных компонентах: строки — активы, столбцы — PC."""
+    vmax = np.abs(loadings.to_numpy()).max()
+    fig, ax = plt.subplots(figsize=(5.4, 8))
+    _style(ax)
+    ax.imshow(loadings.to_numpy(), cmap=DIVERGING, vmin=-vmax, vmax=vmax, aspect="auto")
+    ax.set_xticks(range(loadings.shape[1]), loadings.columns, fontsize=9)
+    ax.set_yticks(range(len(loadings)), loadings.index, fontsize=8)
+    ax.xaxis.tick_top()
+    for i in range(loadings.shape[0]):
+        for j in range(loadings.shape[1]):
+            v = loadings.iat[i, j]
+            ax.text(j, i, f"{v:+.2f}", ha="center", va="center", fontsize=7,
+                    color=SURFACE if abs(v) > 0.6 * vmax else TEXT)
+    _sector_labels(ax, groups, x=loadings.shape[1] - 0.4)
+    ax.set_title(title, loc="left", color=TEXT, fontsize=12, pad=28)
+    fig.tight_layout()
+    _save(fig, save_as)
+    return fig
+
+
+def pca_2d(z: pd.DataFrame, eigenvalues: pd.Series, loadings: pd.DataFrame,
+           names=("«оба вместе»", "«один против\nдругого»"), save_as: str | None = None):
+    """Облако дней для двух активов и оси PC1/PC2; длина стрелки ∝ √λ."""
+    a, b = z.columns
+    share = eigenvalues / eigenvalues.sum() * 100
+    fig, ax = plt.subplots(figsize=(6.4, 6.4))
+    _style(ax)
+    ax.scatter(z[a], z[b], s=9, color="#9ec5f4", edgecolors="none")
+    spec = [("#e34948", (0.1, 0.45), "left"), ("#104281", (-0.1, 0.55), "right")]
+    for k, (color, (dx, dy), ha) in enumerate(spec):
+        v = loadings.iloc[:, k].to_numpy() * np.sqrt(eigenvalues.iloc[k]) * 2.2
+        ax.annotate("", xy=v, xytext=(0, 0),
+                    arrowprops=dict(arrowstyle="-|>", lw=2.4, color=color, mutation_scale=18))
+        ax.text(v[0] + dx, v[1] + dy, f"PC{k + 1} {names[k]}  {share.iloc[k]:.0f}%",
+                color=color, fontsize=10.5, ha=ha, va="center", weight="bold")
+    ax.axhline(0, color="#d9d8d3", lw=1, zorder=0)
+    ax.axvline(0, color="#d9d8d3", lw=1, zorder=0)
+    ax.set_xlim(-5, 5)
+    ax.set_ylim(-5, 5)
+    ax.set_aspect("equal")
+    ax.set_xlabel(f"{a}: насколько день отличался от обычного (в σ)", color=TEXT_MUTED)
+    ax.set_ylabel(f"{b}: насколько день отличался от обычного (в σ)", color=TEXT_MUTED)
+    ax.set_title("Каждая точка — один торговый день", loc="left", color=TEXT, fontsize=12)
+    fig.tight_layout()
+    _save(fig, save_as)
+    return fig
+
+
+def loadings_scatter(loadings: pd.DataFrame, planes=(("PC2", "PC3"), ("PC3", "PC4")), save_as: str | None = None):
+    """Активы как точки в координатах своих весов. Один цвет — сектора не подсказываем."""
+    fig, axes = plt.subplots(1, len(planes), figsize=(6 * len(planes), 5.6))
+    for ax, (x, y) in zip(np.atleast_1d(axes), planes):
+        _style(ax)
+        ax.axhline(0, color="#d9d8d3", lw=1, zorder=0)
+        ax.axvline(0, color="#d9d8d3", lw=1, zorder=0)
+        ax.scatter(loadings[x], loadings[y], s=46, color=BLUE, edgecolors=SURFACE, linewidths=1.5, zorder=3)
+        placed = []  # сдвигаем подпись вниз, пока она не перестанет налезать на соседние
+        for t in loadings.sort_values(y, ascending=False).index:
+            px, py = loadings.loc[t, x], loadings.loc[t, y]
+            ly = py
+            while any(abs(px - qx) < 0.07 and abs(ly - qy) < 0.022 for qx, qy in placed):
+                ly -= 0.022
+            placed.append((px, ly))
+            leader = dict(arrowstyle="-", color="#c3c2b7", lw=0.6) if abs(ly - py) > 0.01 else None
+            ax.annotate(t, (px, py), xytext=(px + 0.012, ly + 0.008), fontsize=8, color=TEXT, arrowprops=leader)
+        ax.set_xlabel(f"вес в {x}", color=TEXT_MUTED)
+        ax.set_ylabel(f"вес в {y}", color=TEXT_MUTED)
+        ax.tick_params(labelsize=8)
+    fig.suptitle("Каждая точка — актив. Координаты — его веса в главных компонентах",
+                 x=0.01, ha="left", color=TEXT, fontsize=12)
+    fig.tight_layout()
+    _save(fig, save_as)
+    return fig
