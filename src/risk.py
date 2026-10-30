@@ -41,3 +41,37 @@ def condition_number(cov: pd.DataFrame) -> float:
     """κ = λ_max / λ_min: во сколько раз Σ⁻¹ может усилить ошибку во входных данных."""
     lam = spectrum(cov)
     return lam[0] / lam[-1]
+
+
+def portfolio_vol(weights: pd.Series, cov: pd.DataFrame) -> float:
+    """σ_p = √(wᵀΣw). Для годовой — передавать годовую Σ (дневная × 252)."""
+    w = weights.reindex(cov.index).fillna(0).to_numpy()
+    return float(np.sqrt(w @ cov.to_numpy() @ w))
+
+
+def risk_contributions(weights: pd.Series, cov: pd.DataFrame) -> pd.DataFrame:
+    """Вклад каждого актива в риск портфеля.
+
+    marginal_i = ∂σ_p/∂w_i = (Σw)_i / σ_p  — на сколько вырастет риск, если чуть добавить актива i;
+    contrib_i  = w_i · marginal_i          — вклад актива; сумма вкладов ровно σ_p (теорема Эйлера).
+    """
+    w = weights.reindex(cov.index).fillna(0)
+    sigma_w = cov.to_numpy() @ w.to_numpy()
+    vol = np.sqrt(w.to_numpy() @ sigma_w)
+    marginal = sigma_w / vol
+    contrib = w.to_numpy() * marginal
+    return pd.DataFrame({"weight": w, "marginal": marginal, "contrib": contrib,
+                         "share": contrib / vol}, index=cov.index)
+
+
+def factor_risk(weights: pd.Series, eigenvalues: pd.Series, loadings: pd.DataFrame) -> pd.DataFrame:
+    """Разложение дисперсии по главным компонентам: wᵀΣw = Σ_k λ_k (q_kᵀw)².
+
+    exposure_k = q_kᵀw — «сколько фактора k сидит в портфеле».
+    Работает с PCA ковариационной матрицы: риск считаем в деньгах, «громкость» важна.
+    """
+    w = weights.reindex(loadings.index).fillna(0).to_numpy()
+    exposure = loadings.to_numpy().T @ w
+    variance = eigenvalues.to_numpy() * exposure ** 2
+    return pd.DataFrame({"exposure": exposure, "variance": variance,
+                         "share": variance / variance.sum()}, index=loadings.columns)

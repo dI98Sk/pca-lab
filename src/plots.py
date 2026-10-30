@@ -155,3 +155,29 @@ def loadings_scatter(loadings: pd.DataFrame, planes=(("PC2", "PC3"), ("PC3", "PC
     fig.tight_layout()
     _save(fig, save_as)
     return fig
+
+
+SERIES = ("#2a78d6", "#eb6834")  # категориальные слоты 1–2: синий, оранжевый
+
+
+def weight_vs_risk(table: pd.DataFrame, title: str, save_as: str | None = None):
+    """Парные горизонтальные столбцы: доля в весе vs доля в риске (table: колонки weight, share)."""
+    t = table.sort_values("share")
+    y = np.arange(len(t))
+    h = 0.38
+    fig, ax = plt.subplots(figsize=(8, 0.55 * len(t) + 1.4))
+    _style(ax)
+    for k, (col, label) in enumerate([("weight", "доля в весе"), ("share", "доля в риске")]):
+        vals = t[col].to_numpy() * 100
+        ax.barh(y + (h / 2 + 0.02) * (1 if k == 0 else -1), vals, height=h, color=SERIES[k], label=label)
+        for yi, v in zip(y, vals):
+            ax.text(v + 0.6, yi + (h / 2 + 0.02) * (1 if k == 0 else -1), f"{v:.0f}%",
+                    va="center", fontsize=8, color=TEXT)
+    ax.set_yticks(y, t.index, fontsize=9)
+    ax.set_xticks([])
+    ax.axvline(0, color="#d9d8d3", lw=1)
+    ax.legend(loc="lower right", frameon=False, fontsize=9, labelcolor=TEXT)
+    ax.set_title(title, loc="left", color=TEXT, fontsize=12)
+    fig.tight_layout()
+    _save(fig, save_as)
+    return fig
