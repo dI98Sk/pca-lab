@@ -181,3 +181,129 @@ def weight_vs_risk(table: pd.DataFrame, title: str, save_as: str | None = None):
     fig.tight_layout()
     _save(fig, save_as)
     return fig
+
+
+def lagrange_geometry(corr2: pd.DataFrame, cov2: pd.DataFrame, save_as: str | None = None):
+    """Геометрия метода Лагранжа: касание линии уровня wᵀΣw и ограничения.
+
+    Слева — PCA (max vᵀCv на окружности vᵀv = 1) для пары активов corr2,
+    справа — min variance (min wᵀΣw на прямой w₁ + w₂ = 1) для пары cov2 (годовая Σ).
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5.8))
+
+    # --- PCA: окружность и линии уровня vᵀCv
+    C = corr2.to_numpy()
+    a, b = corr2.columns
+    lam, Q = np.linalg.eigh(C)
+    ax = axes[0]
+    _style(ax)
+    g = np.linspace(-1.6, 1.6, 400)
+    X, Y = np.meshgrid(g, g)
+    F = C[0, 0] * X ** 2 + 2 * C[0, 1] * X * Y + C[1, 1] * Y ** 2
+    levels = sorted({0.2, round(lam[0], 2), 0.8, 1.2, round(lam[1], 2), 2.0, 2.6})
+    cs = ax.contour(X, Y, F, levels=levels, colors="#86b6ef", linewidths=1)
+    ax.clabel(cs, fontsize=7, fmt="%.2f")
+    t = np.linspace(0, 2 * np.pi, 300)
+    ax.plot(np.cos(t), np.sin(t), color=TEXT, lw=1.8)
+    for k, label, color in [(1, "максимум: PC1", "#e34948"), (0, "минимум: PC2", "#104281")]:
+        v = Q[:, k] * (1 if Q[:, k].sum() >= 0 else -1)
+        if k == 0 and v[1] > 0:
+            v = -v
+        ax.scatter(*v, s=60, color=color, zorder=5)
+        ax.annotate("", xy=v + 0.22 * (2 * C @ v), xytext=v,
+                    arrowprops=dict(arrowstyle="-|>", color=color, lw=1.8))
+        ax.text(v[0] + 0.08, v[1] + (0.62 if v[1] > 0 else -0.62), f"{label}, λ = {lam[k]:.2f}",
+                color=color, fontsize=9.5, weight="bold")
+    ax.set_aspect("equal")
+    ax.set_xlim(-1.6, 1.6)
+    ax.set_ylim(-1.6, 1.6)
+    ax.set_xlabel(f"v₁ (вес {a})", color=TEXT_MUTED)
+    ax.set_ylabel(f"v₂ (вес {b})", color=TEXT_MUTED)
+    ax.set_title("PCA: max vᵀΣv на окружности vᵀv = 1", loc="left", color=TEXT, fontsize=11.5)
+
+    # --- Min variance: прямая w₁ + w₂ = 1 и линии уровня σ
+    S = cov2.to_numpy()
+    a, b = cov2.columns
+    x = np.linalg.solve(S, np.ones(2))
+    w = x / x.sum()
+    var_min = w @ S @ w
+    ax = axes[1]
+    _style(ax)
+    g = np.linspace(-0.4, 1.4, 400)
+    X, Y = np.meshgrid(g, g)
+    F = S[0, 0] * X ** 2 + 2 * S[0, 1] * X * Y + S[1, 1] * Y ** 2
+    cs = ax.contour(X, Y, np.sqrt(F), levels=np.sqrt(var_min * np.array([0.5, 1, 2, 4, 8, 14])),
+                    colors="#86b6ef", linewidths=1)
+    ax.clabel(cs, fontsize=7, fmt=lambda s: f"σ={s:.0%}")
+    ax.plot(g, 1 - g, color=TEXT, lw=1.8)
+    ax.scatter(*w, s=60, color="#e34948", zorder=5)
+    ax.annotate("", xy=w + 4 * (2 * S @ w), xytext=w,
+                arrowprops=dict(arrowstyle="-|>", color="#e34948", lw=1.8))
+    ax.text(1.0, 0.5, f"минимум:\n{a} {w[0]:.0%}, {b} {w[1]:.0%}\nσ = {np.sqrt(var_min):.1%}",
+            color="#e34948", fontsize=9.5, weight="bold", ha="left")
+    ax.text(0.22, 0.86, "w₁ + w₂ = 1", color=TEXT, fontsize=9, rotation=-45, rotation_mode="anchor")
+    ax.set_aspect("equal")
+    ax.set_xlim(-0.4, 1.4)
+    ax.set_ylim(-0.4, 1.4)
+    ax.set_xlabel(f"w₁ (вес {a})", color=TEXT_MUTED)
+    ax.set_ylabel(f"w₂ (вес {b})", color=TEXT_MUTED)
+    ax.set_title("Min variance: min wᵀΣw на прямой w₁ + w₂ = 1", loc="left", color=TEXT, fontsize=11.5)
+
+    fig.tight_layout()
+    _save(fig, save_as)
+    return fig
+
+
+def efficient_frontier(assets: pd.DataFrame, curves: dict, points: dict, title: str, save_as: str | None = None):
+    """Граница эффективности: x — риск, y — доходность (годовые, доли).
+
+    assets: колонки vol, ret, индекс — тикеры (серые точки);
+    curves: {подпись: DataFrame(vol, ret)} — до двух линий (синяя, оранжевая);
+    points: {подпись: (vol, ret)} — отмеченные портфели.
+    """
+    fig, ax = plt.subplots(figsize=(9, 6))
+    _style(ax)
+    ax.scatter(assets.vol * 100, assets.ret * 100, s=22, color="#c3c2b7", zorder=2)
+    for t in assets.index:
+        ax.annotate(t, (assets.vol[t] * 100, assets.ret[t] * 100), xytext=(4, 2),
+                    textcoords="offset points", fontsize=7, color=TEXT_MUTED)
+    for (label, df), color in zip(curves.items(), SERIES):
+        ax.plot(df.vol * 100, df.ret * 100, color=color, lw=2, label=label, zorder=3)
+    for label, (v, m) in points.items():
+        ax.scatter(v * 100, m * 100, s=70, color=TEXT, edgecolors=SURFACE, linewidths=1.5, zorder=5)
+        ax.annotate(label, (v * 100, m * 100), xytext=(8, -4), textcoords="offset points",
+                    fontsize=9, color=TEXT, weight="bold")
+    ax.axhline(0, color="#d9d8d3", lw=1, zorder=0)
+    ax.set_xlabel("риск, % годовых (σ)", color=TEXT_MUTED)
+    ax.set_ylabel("ожидаемая доходность, % годовых (μ)", color=TEXT_MUTED)
+    ax.grid(color="#efeeeb", lw=0.8, zorder=0)
+    ax.legend(loc="lower right", frameon=False, fontsize=9, labelcolor=TEXT)
+    ax.set_title(title, loc="left", color=TEXT, fontsize=12)
+    fig.tight_layout()
+    _save(fig, save_as)
+    return fig
+
+
+SERIES3 = ("#2a78d6", "#eb6834", "#1baf7a")  # категориальные слоты 1–3
+
+
+def wealth_curves(returns: dict, title: str, save_as: str | None = None):
+    """Рост $1 для нескольких стратегий (до трёх), с прямыми подписями у концов линий."""
+    fig, ax = plt.subplots(figsize=(9, 4.8))
+    _style(ax)
+    ends = []
+    for (label, r), color in zip(returns.items(), SERIES3):
+        wealth = (1 + r).cumprod()
+        ax.plot(wealth.index, wealth.values, color=color, lw=2, label=label)
+        ends.append((wealth.iloc[-1], label, color))
+    for value, label, color in sorted(ends):
+        ax.annotate(f"${value:.2f}", (wealth.index[-1], value), xytext=(6, 0),
+                    textcoords="offset points", va="center", fontsize=9, color=TEXT)
+    ax.axhline(1, color="#d9d8d3", lw=1, zorder=0)
+    ax.grid(axis="y", color="#efeeeb", lw=0.8, zorder=0)
+    ax.legend(loc="upper left", frameon=False, fontsize=9, labelcolor=TEXT)
+    ax.set_ylabel("стоимость $1", color=TEXT_MUTED)
+    ax.set_title(title, loc="left", color=TEXT, fontsize=12)
+    fig.tight_layout()
+    _save(fig, save_as)
+    return fig
