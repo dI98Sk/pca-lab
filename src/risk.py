@@ -75,3 +75,37 @@ def factor_risk(weights: pd.Series, eigenvalues: pd.Series, loadings: pd.DataFra
     variance = eigenvalues.to_numpy() * exposure ** 2
     return pd.DataFrame({"exposure": exposure, "variance": variance,
                          "share": variance / variance.sum()}, index=loadings.columns)
+
+
+def ledoit_wolf(returns: pd.DataFrame) -> tuple[pd.DataFrame, float]:
+    """Shrinkage-оценка Ledoit–Wolf (2004) к цели m·I.
+
+    Σ_LW = (1 − δ)·S + δ·m·I, m = tr(S)/N. Собственные векторы S сохраняются,
+    собственные значения сдвигаются к среднему: λ → (1 − δ)λ + δm.
+    δ подбирается из данных: насколько шумна S относительно её отличия от цели.
+    Возвращает дневную Σ_LW и δ.
+    """
+    X = (returns - returns.mean()).to_numpy()
+    T, N = X.shape
+    S = X.T @ X / T
+    m = np.trace(S) / N
+    d2 = np.sum((S - m * np.eye(N)) ** 2)                               # ‖S − mI‖²
+    b2_bar = sum(np.sum((np.outer(x, x) - S) ** 2) for x in X) / T ** 2  # шум оценки S
+    delta = min(b2_bar, d2) / d2
+    shrunk = (1 - delta) * S + delta * m * np.eye(N)
+    return pd.DataFrame(shrunk, index=returns.columns, columns=returns.columns), delta
+
+
+def pca_filtered_cov(returns: pd.DataFrame, k: int = 4) -> pd.DataFrame:
+    """Факторная оценка: k главных компонент корреляций + независимый остаток каждого актива.
+
+    C_k = Q_k Λ_k Q_kᵀ, диагональ возвращаем к 1; Σ = D C_k D, D = diag(σ).
+    Младшие компоненты (где Σ⁻¹ сильнее всего усиливает шум) заменяются диагональю.
+    """
+    corr = returns.corr().to_numpy()
+    lam, Q = np.linalg.eigh(corr)
+    lam, Q = lam[::-1][:k], Q[:, ::-1][:, :k]
+    C = Q @ np.diag(lam) @ Q.T
+    np.fill_diagonal(C, 1.0)
+    sd = returns.std().to_numpy()
+    return pd.DataFrame(C * np.outer(sd, sd), index=returns.columns, columns=returns.columns)
